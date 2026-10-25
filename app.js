@@ -155,18 +155,24 @@ $("join-btn").addEventListener("click", async () => {
   const data = snap.val() || {};
   const plist = data.players || {};
   const count = Object.keys(plist).length;
-  if ((data.meta?.state || "lobby") !== "lobby") {
+  // A player who is already in the room may re-enter at any time (e.g.
+  // after an accidental refresh mid-game); only brand-new joiners are
+  // blocked while a game is in progress or the room is full.
+  const existing = plist[uid] || null;
+  if (!existing && (data.meta?.state || "lobby") !== "lobby") {
     return showError("home-error", "That game is already in progress — wait for the next one, then join with the same code.");
   }
-  if (count >= 8) return showError("home-error", "That room is full (8 players max).");
-  if (plist[uid]) { /* rejoining same room: fine */ }
+  if (!existing && count >= 8) return showError("home-error", "That room is full (8 players max).");
   roomCode = code;
-  await joinRoomAsPlayer();
+  await joinRoomAsPlayer(existing);
 });
 
-async function joinRoomAsPlayer() {
+async function joinRoomAsPlayer(existing) {
   showError("home-error", "");
-  const me = { name: myName, joinedAt: players[uid]?.joinedAt || Date.now(), score: players[uid]?.score || 0, gotIt: false, online: true };
+  // Preserve the server-side record on re-entry: the local players cache
+  // is empty on a fresh page load, so reading it would wipe score, join
+  // order, and got-it state.
+  const me = { name: myName, joinedAt: existing?.joinedAt || players[uid]?.joinedAt || Date.now(), score: existing?.score ?? players[uid]?.score ?? 0, gotIt: existing?.gotIt || false, online: true };
   await set(roomRef("players/" + uid), me);
   onDisconnect(roomRef("players/" + uid + "/online")).set(false);
   $("room-code-label").textContent = roomCode;
