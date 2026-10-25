@@ -44,15 +44,16 @@ function hashStr(s) {
   return h;
 }
 // Deterministic 3 distinct word choices: every client agrees without a write.
-function pickChoices(code, turnNumber) {
+function pickChoices() {
+  // Fresh random choices every turn: the old deterministic seed
+  // (room code + turn number) repeated the same words every game
+  // in a room. Choices are written to the turn node, so all clients
+  // still agree on them.
   const words = window.SKETCH_WORDS;
-  const base = hashStr(code + ":" + turnNumber);
   const out = [], used = new Set();
-  let k = 0;
-  while (out.length < 3 && k < words.length * 2) {
-    const idx = (base + k * 37 + Math.floor(k / 3) * 101) % words.length;
+  while (out.length < 3 && used.size < words.length) {
+    const idx = Math.floor(Math.random() * words.length);
     if (!used.has(idx)) { used.add(idx); out.push(words[idx]); }
-    k++;
   }
   return out;
 }
@@ -412,13 +413,12 @@ $("start-btn").addEventListener("click", async () => {
 
 async function startTurn(n) {
   const order = meta?.order || [];
-  // Find the next online drawer at or after position n-1.
-  let idx = n - 1, drawerId = null;
-  while (idx < order.length) {
-    const cand = order[idx];
-    if (players[cand]?.online !== false) { drawerId = cand; break; }
-    idx++;
-  }
+  // Take the drawer at position n-1 even if their presence flag currently
+  // reads offline: a transient disconnect must not end the game early.
+  // A drawer who is truly gone is caught by the drawer-left reveal in
+  // hostTick, so a stalled turn cannot block the game.
+  const idx = n - 1;
+  const drawerId = order[idx] || null;
   if (!drawerId) { await finishGame(); return; }
   const realTurn = idx + 1;
   // Reset per-turn state.
@@ -429,7 +429,7 @@ async function startTurn(n) {
   const resets = {};
   Object.keys(players).forEach((pid) => { resets["players/" + pid + "/gotIt"] = false; });
   await update(roomRef(""), resets);
-  const choices = pickChoices(roomCode, realTurn);
+  const choices = pickChoices();
   await set(roomRef("turn"), {
     number: realTurn, drawerId, choices,
     word: null, pickDeadline: Date.now() + PICK_SECONDS * 1000,
