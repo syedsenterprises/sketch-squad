@@ -437,6 +437,11 @@ async function startTurn(n) {
   const drawerId = order[idx] || null;
   if (!drawerId) { await finishGame(); return; }
   const realTurn = idx + 1;
+  // Return to the drawing phase FIRST (before the turn is set): the reveal
+  // branch keys off meta.state + revealAt, and leaving them at the previous
+  // turn's reveal made the next hostTick finish the game immediately after
+  // announcing the new turn — turn 2 announced, then instantly over.
+  await update(roomRef("meta"), { state: "drawing", revealAt: null });
   // Reset per-turn state.
   await remove(roomRef("strokes"));
   await remove(roomRef("liveStroke"));
