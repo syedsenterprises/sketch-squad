@@ -502,9 +502,29 @@ async function hostTick() {
   try {
     if (meta.state === "drawing" && turn) {
       const drawer = players[turn.drawerId];
-      // Drawer offline mid-turn -> reveal only after a 10s grace period.
-      // A backgrounded tab's socket can blip for a few seconds; revealing
-      // instantly killed turn 2 in every NLHJ test game.
+      // Pre-pick phase first: a drawer who hasn't picked yet must never be
+      // drawer-left revealed. The old order ran the offline check first, so
+      // a drawer whose socket dropped before picking (e.g. a backgrounded
+      // tab) killed the turn with no word instead of getting an auto-pick.
+      // Auto-pick first; the offline reveal below only applies once a word
+      // is set, and a returning drawer then still gets the full clock.
+      if (!turn.word) {
+        drawerOfflineSince = null;
+        if (turn.pickDeadline && Date.now() > turn.pickDeadline) {
+          const w = turn.choices?.[0]?.w;
+          if (w) {
+            const now = Date.now();
+            await update(roomRef("turn"), { word: w, startedAt: now, endAt: now + TURN_SECONDS * 1000, pickDeadline: null });
+            return;
+          }
+          // No choices to auto-pick (cannot happen with a non-empty word
+          // list): fall through to the offline handling rather than stall.
+        } else {
+          return;
+        }
+      }
+      // Drawer offline mid-turn (word already set) -> reveal only after a
+      // 10s grace period.
       if (drawer && drawer.online === false) {
         if (!drawerOfflineSince) { drawerOfflineSince = Date.now(); return; }
         if (Date.now() - drawerOfflineSince < 10000) return;
@@ -512,17 +532,6 @@ async function hostTick() {
         await doReveal("drawer-left"); return;
       }
       drawerOfflineSince = null;
-      // Drawer never picked -> auto-pick the first choice.
-      if (!turn.word) {
-        if (turn.pickDeadline && Date.now() > turn.pickDeadline) {
-          const w = turn.choices?.[0]?.w;
-          if (w) {
-            const now = Date.now();
-            await update(roomRef("turn"), { word: w, startedAt: now, endAt: now + TURN_SECONDS * 1000, pickDeadline: null });
-          }
-        }
-        return;
-      }
       // Time up, or every guesser got it -> reveal.
       const guessers = onlinePlayers().filter(([id]) => id !== turn.drawerId);
       const allGot = guessers.length > 0 && guessers.every(([, p]) => p.gotIt);
