@@ -95,6 +95,7 @@ let meta = null, players = {}, turn = null, turnEarned = {};
 let strokes = [], liveStrokeData = null;
 let unsubs = [];
 let amHost = false, queueListenerOn = false;
+let drawerOfflineSince = null;
 let drawing = false, currentPoints = [], lastLivePush = 0, myGotIt = false;
 
 function roomRef(p) { return ref(db, "rooms/" + roomCode + (p ? "/" + p : "")); }
@@ -115,6 +116,14 @@ if (db && auth) {
   // Connection banner via .info/connected
   onValue(ref(db, ".info/connected"), (snap) => {
     $("conn-banner").classList.toggle("hidden", snap.val() !== false);
+    // Reconnect re-assert: a transient disconnect fires onDisconnect and
+    // leaves online=false even after the socket comes back. Re-assert
+    // online and re-register onDisconnect on every reconnect, or a
+    // briefly-backgrounded player looks "left" for the rest of the game.
+    if (snap.val() === true && roomCode && uid) {
+      update(roomRef("players/" + uid), { online: true }).catch(() => {});
+      onDisconnect(roomRef("players/" + uid + "/online")).set(false);
+    }
   });
 } else {
   $("server-warning").classList.remove("hidden");
@@ -418,6 +427,7 @@ $("start-btn").addEventListener("click", async () => {
 });
 
 async function startTurn(n) {
+  drawerOfflineSince = null;
   const order = meta?.order || [];
   // Take the drawer at position n-1 even if their presence flag currently
   // reads offline: a transient disconnect must not end the game early.
@@ -492,8 +502,16 @@ async function hostTick() {
   try {
     if (meta.state === "drawing" && turn) {
       const drawer = players[turn.drawerId];
-      // Drawer left mid-turn -> reveal immediately.
-      if (drawer && drawer.online === false) { await doReveal("drawer-left"); return; }
+      // Drawer offline mid-turn -> reveal only after a 10s grace period.
+      // A backgrounded tab's socket can blip for a few seconds; revealing
+      // instantly killed turn 2 in every NLHJ test game.
+      if (drawer && drawer.online === false) {
+        if (!drawerOfflineSince) { drawerOfflineSince = Date.now(); return; }
+        if (Date.now() - drawerOfflineSince < 10000) return;
+        drawerOfflineSince = null;
+        await doReveal("drawer-left"); return;
+      }
+      drawerOfflineSince = null;
       // Drawer never picked -> auto-pick the first choice.
       if (!turn.word) {
         if (turn.pickDeadline && Date.now() > turn.pickDeadline) {
